@@ -111,7 +111,6 @@ func doGoCmd(args ...string) {
 	check(err, "get tmpvend")
 
 	err = os.MkdirAll(tmpvend, 0755)
-	//err = os.MkdirAll(filepath.Join(tmpvend, "src", filepath.Dir(pkg)), 0755)
 	check(err, "mk tmpvend")
 
 	err = os.Symlink(filepath.Join(workdir, "vendor"), filepath.Join(tmpvend, "src"))
