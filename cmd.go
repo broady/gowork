@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"io/ioutil"
 	"log"
@@ -12,7 +13,7 @@ import (
 
 var vendor = flag.Bool("vendorall", true, "don't use the system's GOPATH. work entirely in the gowork workspace.")
 
-const markerFile = ".gowork"
+const confFile = "go.work.conf"
 
 const wrapper = `#!/bin/bash
 set -e
@@ -38,7 +39,7 @@ func main() {
 	case "install-wrapper":
 		doInstallWrapper()
 	case "init":
-		doInit()
+		doInit(flag.Arg(1))
 	case "get":
 		err := os.Mkdir("vendor", 0755)
 		if err != nil && !os.IsExist(err) {
@@ -59,19 +60,22 @@ func doInstallWrapper() {
 	check(err, "could not write wrapper")
 }
 
-func doInit() {
-	f, err := os.Create(markerFile)
-	check(err, "create marker")
-	f.Close()
-
-	err = os.Mkdir("vendor", 0755)
-	if err != nil && !os.IsExist(err) {
-		check(err, "create vendor")
+func doInit(pkg string) {
+	if pkg == "" {
+		log.Fatal("pass in a base package to `gowork init`. for example: `gowork init user/mypkg`")
 	}
+
+	f, err := os.Create(confFile)
+	check(err, "create marker")
+	defer f.Close()
+
+	conf := &conf{Pkg: pkg}
+	err = json.NewEncoder(f).Encode(conf)
+	check(err, "could not write to conf file")
 }
 
 func doBuild() {
-	workdir := findRoot()
+	workdir, _ := findRoot()
 
 	err := os.Mkdir(filepath.Join(workdir, "bin"), 0755)
 	if err != nil && !os.IsExist(err) {
@@ -82,46 +86,45 @@ func doBuild() {
 }
 
 func doGoCmd(args ...string) {
-	workdir := findRoot()
+	workdir, pkg := findRoot()
 	err := os.Chdir(workdir)
-	if err != nil {
-		log.Fatalf("need to gowork init? %v", err)
-	}
-
-	// Vendor dir
-	tmpdir, err := ioutil.TempDir("", "gowork-t-")
-	if tmpdir != "" {
-		defer os.RemoveAll(tmpdir)
-	}
-	check(err, "get tempdir")
-
-	err = os.MkdirAll(tmpdir, 0755)
-	check(err, "mktempdir")
-
-	err = os.Symlink(filepath.Join(workdir, "vendor"), filepath.Join(tmpdir, "src"))
-	check(err, "symlink")
+	check(err, "need to call gowork init {root-pkg}")
 
 	// Workspace dir
 	tmpwork, err := ioutil.TempDir("", "gowork-w-")
-	if tmpdir != "" {
+	if tmpwork != "" {
 		defer os.RemoveAll(tmpwork)
 	}
 	check(err, "get tmpwork")
 
-	err = os.MkdirAll(tmpwork, 0755)
+	err = os.MkdirAll(filepath.Join(tmpwork, "src", filepath.Dir(pkg)), 0755)
 	check(err, "tmpwork")
 
-	err = os.Symlink(filepath.Join(workdir), filepath.Join(tmpwork, "src"))
-	check(err, "symlink")
+	err = os.Symlink(workdir, filepath.Join(tmpwork, "src", pkg))
+	check(err, "symlink work")
+
+	// Vendor dir
+	tmpvend, err := ioutil.TempDir("", "gowork-v-")
+	if tmpvend != "" {
+		defer os.RemoveAll(tmpvend)
+	}
+	check(err, "get tmpvend")
+
+	err = os.MkdirAll(tmpvend, 0755)
+	//err = os.MkdirAll(filepath.Join(tmpvend, "src", filepath.Dir(pkg)), 0755)
+	check(err, "mk tmpvend")
+
+	err = os.Symlink(filepath.Join(workdir, "vendor"), filepath.Join(tmpvend, "src"))
+	check(err, "symlink tmpvend")
 
 	// Run go command.
 
 	cmd := exec.Command("go", args...)
-	cmd.Dir = filepath.Join(tmpwork, "src")
+	cmd.Dir = filepath.Join(tmpwork, "src", pkg)
 	if gopath := os.Getenv("GOPATH"); gopath != "" && !*vendor {
-		cmd.Env = gopathEnv(tmpdir, gopath, tmpwork)
+		cmd.Env = gopathEnv(tmpvend, gopath, tmpwork)
 	} else {
-		cmd.Env = gopathEnv(tmpdir, tmpwork)
+		cmd.Env = gopathEnv(tmpvend, tmpwork)
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -141,12 +144,12 @@ func gopathEnv(dirs ...string) []string {
 	return append(env, gopath)
 }
 
-func findRoot() string {
+func findRoot() (dir string, pkg string) {
 	wd, err := os.Getwd()
 	check(err, "getwd")
 	root := wd
 	for {
-		_, err := os.Stat(filepath.Join(wd, markerFile))
+		_, err := os.Stat(filepath.Join(wd, confFile))
 		if err == nil {
 			break
 		}
@@ -159,7 +162,25 @@ func findRoot() string {
 		}
 		root = newRoot
 	}
-	return root
+
+	conf := readConf(root)
+
+	return root, conf.Pkg
+}
+
+type conf struct {
+	Pkg string
+}
+
+func readConf(root string) *conf {
+	b, err := ioutil.ReadFile(filepath.Join(root, confFile))
+	check(err, "could not read conf file")
+	conf := &conf{}
+
+	err = json.Unmarshal(b, conf)
+	check(err, "could not decode conf file")
+
+	return conf
 }
 
 func check(err error, msg string) {

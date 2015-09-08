@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"./mypkg"
+	"mywork/sample/mypkg"
 
 	"github.com/satori/go.uuid"
 )

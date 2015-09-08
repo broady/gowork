@@ -5,7 +5,7 @@ $ cd ~/goworkproj
 
 # Get the gowork tool (once)
 $ go get github.com/broady/gowork
-$ gowork init
+$ gowork init "$USER/goworkproj"
 
 # (if you don't want gowork on your PATH...)
 $ gowork install-wrapper
